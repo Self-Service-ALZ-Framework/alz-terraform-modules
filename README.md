@@ -46,4 +46,4 @@ git push origin --tags
 
 ## Documentation
 
-**Start here →** [Main Consumption Guide](../CONSUMPTION-GUIDE.md)
+**Start here →** [Main Consumption Guide](https://github.com/Self-Service-ALZ-Framework/alz-terraform-modules)
