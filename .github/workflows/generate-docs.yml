@@ -1,0 +1,32 @@
+name: Generate Terraform Documentation
+
+on:
+  workflow_call:
+    inputs:
+      module_name:
+        required: true
+        type: string
+        description: "Name of the Terraform module to document"
+
+jobs:
+  terraform-docs:
+    name: Docs for ${{ inputs.module_name }}
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install terraform-docs
+        id: setup
+        run: |
+          curl -sSLo terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.18.0/terraform-docs-v0.18.0-linux-amd64.tar.gz
+          tar -xzf terraform-docs.tar.gz
+          sudo mv terraform-docs /usr/local/bin/
+          terraform-docs --version
+
+      - name: Generate terraform documentation
+        id: generate
+        working-directory: ./avm_modules/${{ inputs.module_name }}
+        run: |
+          terraform-docs markdown table --output-file README.md --output-mode inject .

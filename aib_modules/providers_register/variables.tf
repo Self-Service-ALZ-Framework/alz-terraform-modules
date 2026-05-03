@@ -1,0 +1,1 @@
+variable "providers_list" {}

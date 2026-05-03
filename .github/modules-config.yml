@@ -1,0 +1,147 @@
+# Terraform Modules Configuration
+# This file defines all modules and their examples for automated testing
+
+modules:
+  - name: terraform-azurerm-avm-res-keyvault-vault-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-storage-storageaccount-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-sql-server-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-apimanagement-service-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-app-containerapp-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-cognitiveservices-account-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-containerservice-managedcluster-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-dbformysql-flexibleserver-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-dbforpostgresql-flexibleserver-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-documentdb-databaseaccount-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-machinelearningservices-workspace-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-search-searchservice-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  
+  - name: terraform-azurerm-avm-ptn-aiml-ai-foundry-main
+    enabled: false
+    has_unit_tests: false
+    examples: 
+      - basic
+
+  - name: terraform-azurerm-avm-res-web-site-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+  - name: terraform-azurerm-avm-res-datafactory-factory-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - basic
+  - name: terraform-azurerm-avm-res-network-publicipaddress-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default-azurerm-v4
+
+  - name: terraform-azurerm-avm-res-resources-resourcegroup-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default-aurerm-v4
+
+  - name: terraform-azurerm-avm-res-web-serverfarm-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-logic-workflow-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-containerregistry-registry-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-network-privateendpoint-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-operationalinsights-workspace-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-insights-component-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+
+  - name: terraform-azurerm-avm-res-communication-emailservice-main
+    enabled: true
+    has_unit_tests: true
+    examples:
+      - default
+  

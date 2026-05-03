@@ -1,0 +1,116 @@
+name: Validate Terraform Module
+
+on:
+  workflow_call:
+    inputs:
+      module_name:
+        required: true
+        type: string
+        description: "Name of the Terraform module to validate"
+      example_name:
+        required: true
+        type: string
+        description: "Name of the example to validate"
+      terraform_version:
+        required: false
+        type: string
+        default: "1.14.2"
+        description: "Terraform version to use"
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+env:
+  ARM_USE_CLI: true
+  ARM_USE_AZUREAD: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: Validate ${{ inputs.module_name }} - ${{ inputs.example_name }}
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------- Install Azure CLI ----------
+      - name: Install Azure CLI
+        run: |
+          set -e
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az version
+
+      # ---------- Login with Managed Identity ----------
+      - name: Azure CLI login (Managed Identity)
+        run: |
+          set -e
+          az cloud set -n azurecloud
+          az login --identity --client-id "${{ secrets.AZURE_CLIENT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          echo "Tenant: $(az account show --query tenantId -o tsv)"
+          echo "Subscription: $(az account show --query id -o tsv)"
+
+      # ---------- Validate Subscription & Token ----------
+      - name: Validate Azure Context
+        run: |
+          set -e
+          sub=$(az account show --query id -o tsv)
+          ten=$(az account show --query tenantId -o tsv)
+          test "$sub" = "${{ secrets.AZURE_SUBSCRIPTION_ID }}" || { echo "❌ Wrong subscription: $sub"; exit 1; }
+          test "$ten" = "${{ secrets.AZURE_TENANT_ID }}" || { echo "❌ Wrong tenant: $ten"; exit 1; }
+          az account get-access-token --resource https://management.azure.com -o none
+          echo "✅ Login verified and access token retrieved."
+
+      # ---------- Install Terraform ----------
+      - name: Install Terraform
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y unzip curl
+          curl -fsSL https://releases.hashicorp.com/terraform/${{ inputs.terraform_version }}/terraform_${{ inputs.terraform_version }}_linux_amd64.zip -o terraform.zip
+          unzip terraform.zip
+          sudo mv terraform /usr/local/bin/
+          terraform --version
+
+      # ---------- Terraform Format Check ----------
+      - name: Terraform Format Check
+        id: fmt
+        working-directory: ./avm_modules/${{ inputs.module_name }}/examples/${{ inputs.example_name }}
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      # ---------- Terraform Init ----------
+      - name: Terraform Init
+        id: init
+        working-directory: ./avm_modules/${{ inputs.module_name }}/examples/${{ inputs.example_name }}
+        run: terraform init -backend=false
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+      # ---------- Terraform Validate ----------
+      - name: Terraform Validate
+        id: validate
+        working-directory: ./avm_modules/${{ inputs.module_name }}/examples/${{ inputs.example_name }}
+        run: terraform validate -no-color
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+      # ---------- Fail on Format Issues ----------
+      - name: Fail if Formatting Issues
+        if: steps.fmt.outcome == 'failure'
+        run: |
+          echo "⚠️ Terraform formatting issues detected in ${{ inputs.module_name }}"
+          echo "Run 'terraform fmt -recursive' locally to fix formatting."
+          exit 1

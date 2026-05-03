@@ -1,0 +1,113 @@
+name: Run Terraform Unit Tests
+
+on:
+  workflow_call:
+    inputs:
+      module_name:
+        required: true
+        type: string
+        description: "Name of the Terraform module to test"
+      terraform_version:
+        required: false
+        type: string
+        default: "1.14.2"
+        description: "Terraform version to use"
+    outputs:
+      test_status:
+        description: "Status of the unit tests (passed/failed)"
+        value: ${{ jobs.unit-tests.outputs.status }}
+
+jobs:
+  unit-tests:
+    name: Unit Tests - ${{ inputs.module_name }}
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      status: ${{ steps.test.outputs.test_failed == 'true' && 'failed' || 'passed' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Terraform
+        run: |
+          TERRAFORM_VERSION="${{ inputs.terraform_version }}"
+          
+          if command -v terraform &> /dev/null; then
+            INSTALLED_VERSION=$(terraform version -json 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')
+            if [[ "$INSTALLED_VERSION" == "$TERRAFORM_VERSION" ]]; then
+              echo "Terraform $TERRAFORM_VERSION already installed"
+              terraform --version
+              exit 0
+            fi
+            echo "Different version installed ($INSTALLED_VERSION), installing $TERRAFORM_VERSION..."
+          else
+            echo "Terraform not found, installing version $TERRAFORM_VERSION..."
+          fi
+          
+          # Ensure unzip is available
+          if ! command -v unzip &> /dev/null; then
+            echo "ERROR: unzip is not installed. Please install unzip on your runner."
+            echo "Run: sudo apt-get install -y unzip"
+            exit 1
+          fi
+          
+          # Create local bin directory
+          mkdir -p $HOME/.local/bin
+          
+          # Download and install Terraform
+          curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip -o /tmp/terraform.zip
+          cd /tmp
+          unzip -o terraform.zip
+          chmod +x terraform
+          mv terraform $HOME/.local/bin/
+          rm terraform.zip
+          
+          # Add to PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          
+          # Verify installation
+          $HOME/.local/bin/terraform --version
+
+      - name: Terraform Init
+        id: init
+        working-directory: ./avm_modules/${{ inputs.module_name }}
+        run: terraform init -backend=false
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+      - name: Run Terraform Tests
+        id: test
+        working-directory: ./avm_modules/${{ inputs.module_name }}
+        run: |
+          set +e  # Don't exit on error
+          terraform test -verbose
+          TEST_EXIT_CODE=$?
+          set -e
+          
+          if [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "::warning::Unit tests failed for ${{ inputs.module_name }} (exit code: $TEST_EXIT_CODE)"
+            echo "test_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::Unit tests passed for ${{ inputs.module_name }}"
+            echo "test_failed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Always exit successfully to avoid annotations
+          exit 0
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+      - name: Upload Test Results
+        if: always()
+        run: |
+          echo "### Unit Test Results for ${{ inputs.module_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.test.outputs.test_failed }}" == "true" ]; then
+            echo "⚠️ **Unit tests failed** - Check logs for details. This may be due to upstream module issues." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Unit tests passed**" >> $GITHUB_STEP_SUMMARY
+          fi

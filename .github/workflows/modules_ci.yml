@@ -1,0 +1,292 @@
+name: Terraform Modules Testing
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - features/**
+    paths:
+      - "avm_modules/**/*.tf"
+      - "avm_modules/**/*.tfvars"
+      - ".github/workflows/**"
+      - ".github/modules-config.yml"
+  pull_request:
+    branches:
+      - main
+      - develop
+      - features/**
+    paths:
+      - "avm_modules/**/*.tf"
+      - "avm_modules/**/*.tfvars"
+  workflow_dispatch:
+
+env:
+  TERRAFORM_VERSION: "1.14.2"
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+
+jobs:
+  # ============================================
+  # SETUP: Read module configuration
+  # ============================================
+  setup:
+    name: Setup Module Matrix
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      modules: ${{ steps.set-matrix.outputs.modules }}
+      examples: ${{ steps.set-matrix.outputs.examples }}
+      modules-with-tests: ${{ steps.set-matrix.outputs.modules-with-tests }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read modules configuration
+        id: set-matrix
+        run: |
+          # Check common yq installation locations and add to PATH
+          if [ -f "$HOME/.local/bin/yq" ]; then
+            export PATH="$HOME/.local/bin:$PATH"
+          elif [ -f "/usr/local/bin/yq" ]; then
+            export PATH="/usr/local/bin:$PATH"
+          fi
+          
+          # If yq is still not available, install it locally
+          if ! command -v yq &> /dev/null; then
+            echo "yq not found, installing to $HOME/.local/bin..."
+            mkdir -p $HOME/.local/bin
+            curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o $HOME/.local/bin/yq
+            chmod +x $HOME/.local/bin/yq
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          
+          echo "Using yq version: $(yq --version)"
+          
+          # Extract enabled modules
+          MODULES=$(yq eval '.modules[] | select(.enabled == true) | .name' .github/modules-config.yml | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "modules=$MODULES" >> $GITHUB_OUTPUT
+          echo "Modules to test: $MODULES"
+          
+          # Extract all module-example combinations
+          EXAMPLES=$(yq eval -o=json '.modules[] | select(.enabled == true) | .examples[] as $ex | {"module": .name, "example": $ex}' .github/modules-config.yml | jq -s -c '.')
+          echo "examples=$EXAMPLES" >> $GITHUB_OUTPUT
+          echo "Examples to test: $EXAMPLES"
+          
+          # Extract modules with unit tests
+          MODULES_WITH_TESTS=$(yq eval '.modules[] | select(.enabled == true and .has_unit_tests == true) | .name' .github/modules-config.yml | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "modules-with-tests=$MODULES_WITH_TESTS" >> $GITHUB_OUTPUT
+          echo "Modules with unit tests: $MODULES_WITH_TESTS"
+  # ============================================
+  # VALIDATE: All modules
+  # ============================================
+  validate:
+    name: Validate ${{ matrix.example.module }} - ${{ matrix.example.example }}
+    needs: setup
+    if: needs.setup.outputs.examples != '[]'
+    strategy:
+      matrix:
+        example: ${{ fromJson(needs.setup.outputs.examples) }}
+      fail-fast: false
+    uses: ./.github/workflows/validate-module.yml
+    with:
+      module_name: ${{ matrix.example.module }}
+      example_name: ${{ matrix.example.example }}
+      terraform_version: "1.14.2"
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+
+  # ============================================
+  # LINT: All modules
+  # ============================================
+  lint:
+    name: Lint
+    needs: setup
+    if: needs.setup.outputs.modules != '[]'
+    strategy:
+      matrix:
+        module: ${{ fromJson(needs.setup.outputs.modules) }}
+      fail-fast: false
+    uses: ./.github/workflows/lint-module.yml
+    with:
+      module_name: ${{ matrix.module }}
+      terraform_version: "1.14.2"
+
+  # ============================================
+  # DOCS: All modules
+  # ============================================
+  docs:
+    name: Documentation
+    needs: setup
+    if: needs.setup.outputs.modules != '[]'
+    strategy:
+      matrix:
+        module: ${{ fromJson(needs.setup.outputs.modules) }}
+      fail-fast: false
+    uses: ./.github/workflows/generate-docs.yml
+    with:
+      module_name: ${{ matrix.module }}
+
+  # ============================================
+  # UNIT TESTS: Modules with tests
+  # ============================================
+  unit-tests:
+    name: Unit Tests (${{ matrix.module }})
+    needs: setup
+    if: needs.setup.outputs.modules-with-tests != '[]'
+    strategy:
+      matrix:
+        module: ${{ fromJson(needs.setup.outputs.modules-with-tests) }}
+      fail-fast: false
+    uses: ./.github/workflows/unit-tests.yml
+    with:
+      module_name: ${{ matrix.module }}
+      terraform_version: "1.14.2"
+
+  # ============================================
+  # SUMMARY
+  # ============================================
+  summary:
+    name: Pipeline Summary
+    runs-on: [self-hosted, Linux, X64]
+    needs: [setup, validate, lint, docs, unit-tests]
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate Summary
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+          UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+          SETUP_RESULT: ${{ needs.setup.result }}
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          
+          echo "## 🚀 Terraform CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.event_name }} on \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Module counts
+          MODULE_COUNT=$(yq eval '.modules[] | select(.enabled == true) | .name' .github/modules-config.yml | wc -l)
+          EXAMPLE_COUNT=$(yq eval '.modules[] | select(.enabled == true) | .examples[]' .github/modules-config.yml | wc -l)
+          TEST_MODULE_COUNT=$(yq eval '.modules[] | select(.enabled == true and .has_unit_tests == true) | .name' .github/modules-config.yml | wc -l)
+
+          echo "### 📊 Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "- **Modules Tested:** $MODULE_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Examples Tested:** $EXAMPLE_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Modules with Unit Tests:** $TEST_MODULE_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Job Results Table
+          echo "### 📋 Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Setup
+          if [ "$SETUP_RESULT" == "success" ]; then
+            echo "| 🔧 Setup | ✅ Success | Configuration parsed successfully |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 🔧 Setup | ❌ Failed | Configuration parsing failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Validation
+          if [ "$VALIDATE_RESULT" == "success" ]; then
+            echo "| 📦 Validation | ✅ Success | All $MODULE_COUNT modules validated |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VALIDATE_RESULT" == "failure" ]; then
+            echo "| 📦 Validation | ❌ Failed | Some modules failed validation |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VALIDATE_RESULT" == "skipped" ]; then
+            echo "| 📦 Validation | ⏭️ Skipped | No modules to validate |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 📦 Validation | ⚠️ $VALIDATE_RESULT | Check logs for details |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Linting
+          if [ "$LINT_RESULT" == "success" ]; then
+            echo "| 🔍 Linting | ✅ Success | All $MODULE_COUNT modules passed |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$LINT_RESULT" == "failure" ]; then
+            echo "| 🔍 Linting | ❌ Failed | Some modules failed linting |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$LINT_RESULT" == "skipped" ]; then
+            echo "| 🔍 Linting | ⏭️ Skipped | No modules to lint |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 🔍 Linting | ⚠️ $LINT_RESULT | Check logs for details |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Documentation
+          if [ "$DOCS_RESULT" == "success" ]; then
+            echo "| 📚 Documentation | ✅ Success | Docs generated for all modules |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$DOCS_RESULT" == "failure" ]; then
+            echo "| 📚 Documentation | ❌ Failed | Doc generation failed for some modules |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$DOCS_RESULT" == "skipped" ]; then
+            echo "| 📚 Documentation | ⏭️ Skipped | No modules to document |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 📚 Documentation | ⚠️ $DOCS_RESULT | Check logs for details |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Unit Tests
+          if [ "$UNIT_TESTS_RESULT" == "success" ]; then
+            echo "| 🧪 Unit Tests | ✅ Success | All $TEST_MODULE_COUNT modules passed tests |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$UNIT_TESTS_RESULT" == "failure" ]; then
+            echo "| 🧪 Unit Tests | ❌ Failed | Some modules failed unit tests |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$UNIT_TESTS_RESULT" == "skipped" ]; then
+            echo "| 🧪 Unit Tests | ⏭️ Skipped | No modules with unit tests |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 🧪 Unit Tests | ⚠️ $UNIT_TESTS_RESULT | Check logs for details |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Overall Status
+          echo "### 🎯 Overall Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED_STAGES=""
+          [ "$SETUP_RESULT" != "success" ] && FAILED_STAGES="${FAILED_STAGES}Setup, "
+          [ "$VALIDATE_RESULT" != "success" ] && [ "$VALIDATE_RESULT" != "skipped" ] && FAILED_STAGES="${FAILED_STAGES}Validation, "
+          [ "$LINT_RESULT" != "success" ] && [ "$LINT_RESULT" != "skipped" ] && FAILED_STAGES="${FAILED_STAGES}Linting, "
+          [ "$DOCS_RESULT" != "success" ] && [ "$DOCS_RESULT" != "skipped" ] && FAILED_STAGES="${FAILED_STAGES}Documentation, "
+          [ "$UNIT_TESTS_RESULT" != "success" ] && [ "$UNIT_TESTS_RESULT" != "skipped" ] && FAILED_STAGES="${FAILED_STAGES}Unit Tests, "
+
+          if [ -z "$FAILED_STAGES" ]; then
+            echo "## 🎉 All Checks Passed!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **$MODULE_COUNT modules** validated successfully" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **$EXAMPLE_COUNT examples** tested" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **$TEST_MODULE_COUNT modules** passed unit tests" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** Ready to merge ✨" >> $GITHUB_STEP_SUMMARY
+          else
+            # Remove trailing comma and space
+            FAILED_STAGES=$(echo "$FAILED_STAGES" | sed 's/, $//')
+            echo "## ❌ Pipeline Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Failed stages:** $FAILED_STAGES" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔍 Action Required" >> $GITHUB_STEP_SUMMARY
+            echo "1. Review the failed job logs above" >> $GITHUB_STEP_SUMMARY
+            echo "2. Fix the identified issues" >> $GITHUB_STEP_SUMMARY
+            echo "3. Push changes to re-trigger the pipeline" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** Needs attention ⚠️" >> $GITHUB_STEP_SUMMARY
+            
+            # Set exit code to fail the workflow
+            exit 1
+          fi

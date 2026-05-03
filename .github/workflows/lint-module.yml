@@ -1,0 +1,38 @@
+name: TFLint Code Quality
+
+on:
+  workflow_call:
+    inputs:
+      module_name:
+        required: true
+        type: string
+        description: "Name of the Terraform module to lint"
+      terraform_version:                # 👈 add this
+        type: string
+        default: "1.14.2"
+        description: "Terraform version to use for linting"
+
+jobs:
+  tflint:
+    name: Lint ${{ inputs.module_name }}
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup TFLint
+        id: setup
+        run: |
+          curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          tflint --version
+
+      - name: Init TFLint
+        id: init
+        working-directory: ./avm_modules/${{ inputs.module_name }}
+        run: tflint --init
+
+      - name: Run TFLint
+        id: lint
+        working-directory: ./avm_modules/${{ inputs.module_name }}
+        run: tflint --recursive --format compact --minimum-failure-severity=error
